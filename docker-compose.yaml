@@ -1,0 +1,104 @@
+version: '3.9'
+
+services:
+  nginx:
+    restart: always
+    build: nginx/
+    image: maxwelldps/chaz_nginx:latest
+    ports:
+      - 8080:80
+      - 8443:443
+    depends_on:
+      - chaz-wsgi
+    volumes:
+      - static:/code/static
+
+  chaz-wsgi:
+    user: chaz
+    restart: always
+    build: . 
+    image: maxwelldps/chaz:latest
+    command: |
+      bash -c 'sleep 5;\
+        python ./manage.py showmigrations; \
+        python manage.py migrate; \
+        python manage.py createsuperuser --noinput; \
+        python manage.py collectstatic --no-input; \
+        python manage.py create_geo_admin_group; \
+        gunicorn -c chaz/gunicorn.conf.py
+    env_file:
+      - .env
+    environment:
+      DB_HOST: database
+      CELERY_BROKER_URL: "amqp://${RABBITMQ_DEFAULT_USER}:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/"
+      DJANGO_SUPERUSER_PASSWORD: "${ADMIN_PASSWORD}"
+      DJANGO_SUPERUSER_USERNAME: "${ADMIN_USERNAME}"
+      DJANGO_SUPERUSER_EMAIL: "${ADMIN_EMAIL}"
+    volumes:
+      - static:/opt/chaz/static
+    depends_on:
+      - database
+      - rabbitmq
+
+  chaz-worker:
+    user: chaz
+    restart: always
+    build: . 
+    image: maxwelldps/chaz:latest
+    command: celery -A chaz worker -l info --pool=gevent --concurrency 100
+    env_file:
+      - .env
+    environment:
+      DB_HOST: database
+      CELERY_BROKER_URL: "amqp://${RABBITMQ_DEFAULT_USER}:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/"
+      DJANGO_SUPERUSER_PASSWORD: "${ADMIN_PASSWORD}"
+      DJANGO_SUPERUSER_USERNAME: "${ADMIN_USERNAME}"
+      DJANGO_SUPERUSER_EMAIL: "${ADMIN_EMAIL}"
+    volumes:
+      - static:/opt/chaz/static
+    depends_on:
+      - database
+      - rabbitmq
+
+  chaz-beat:
+    user: chaz
+    restart: always
+    build: .
+    image: maxwelldps/chaz:latest
+    command: celery -A chaz beat -l info
+    env_file:
+      - .env
+    environment:
+      DB_HOST: database
+      CELERY_BROKER_URL: "amqp://${RABBITMQ_DEFAULT_USER}:${RABBITMQ_DEFAULT_PASS}@rabbitmq:5672/"
+      DJANGO_SUPERUSER_PASSWORD: "${ADMIN_PASSWORD}"
+      DJANGO_SUPERUSER_USERNAME: "${ADMIN_USERNAME}"
+      DJANGO_SUPERUSER_EMAIL: "${ADMIN_EMAIL}"
+    depends_on:
+      - database
+      - rabbitmq
+
+  database:
+    image: postgres:latest
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: "${DB_PASS}"
+      POSTGRES_USER: "${DB_USER}"
+      POSTGRES_DB: "${DB_NAME}"
+      PGDATA: "/var/lib/postgresql/data/pgdata"
+    volumes:
+      - database:/var/lib/postgresql/data
+
+  rabbitmq:
+    image: 'rabbitmq:management'
+    restart: always
+    ports:
+      - "15672:15672"
+      - "5672:5672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+        
+volumes:
+  static:
+  database:
